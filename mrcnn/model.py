@@ -18,6 +18,9 @@ import multiprocessing
 import numpy as np
 import skimage.transform
 import tensorflow as tf
+import horovod as hvd
+import horovod.keras as hvd_keras
+hvd_keras.init()
 import keras
 import keras.backend as K
 import keras.layers as KL
@@ -2166,6 +2169,8 @@ class MaskRCNN():
         optimizer = keras.optimizers.SGD(
             lr=learning_rate, momentum=momentum,
             clipnorm=self.config.GRADIENT_CLIP_NORM)
+        optimizer = hvd_keras.DistributedOptimizer(optimizer)
+
         # Add Losses
         # First, clear previously set losses to avoid duplication
         self.keras_model._losses = []
@@ -2271,8 +2276,8 @@ class MaskRCNN():
                 print('Re-starting from epoch %d' % self.epoch)
 
         # Directory for training logs
-        self.log_dir = os.path.join(self.model_dir, "{}{:%Y%m%dT%H%M}".format(
-            self.config.NAME.lower(), now))
+        self.log_dir = os.path.join(self.model_dir, "{}{:%Y%m%dT%H%M}_{}of{}".format(
+            self.config.NAME.lower(), now, hvd_keras.rank(), hvd_keras.size()))
 
         # Create log_dir if not exists
         if not os.path.exists(self.log_dir):
@@ -2346,9 +2351,12 @@ class MaskRCNN():
         callbacks = [
             keras.callbacks.TensorBoard(log_dir=self.log_dir,
                                         histogram_freq=0, write_graph=True, write_images=False),
-            keras.callbacks.ModelCheckpoint(self.checkpoint_path,
-                                            verbose=0, save_weights_only=True),
+            hvd_keras.callbacks.BroadcastGlobalVariablesCallback(0),
         ]
+
+        if hvd_keras.rank() == 0:
+            callbacks.append(keras.callbacks.ModelCheckpoint(self.checkpoint_path,
+                                            verbose=0, save_weights_only=True))
 	
         # Add custom callbacks to the list
         if custom_callbacks:
